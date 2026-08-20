@@ -7,6 +7,7 @@ mod bootstrap;
 mod dns;
 mod limit;
 mod model;
+mod pricing;
 mod rdap;
 mod tlds;
 mod whois;
@@ -26,6 +27,7 @@ use hickory_resolver::TokioAsyncResolver;
 use bootstrap::Bootstrap;
 use limit::HostLimiter;
 use model::{CheckResult, Details, Method, Register, Status};
+use pricing::Prices;
 use tlds::Registry;
 use whois::TldInfo;
 
@@ -35,6 +37,7 @@ const USER_AGENT: &str = concat!("ds/", env!("CARGO_PKG_VERSION"), " (domain-sea
 #[command(
     name = "ds",
     version,
+    disable_version_flag = true,
     about = "Check domain availability over RDAP with a WHOIS fallback",
     long_about = "Check domain availability over RDAP with a WHOIS fallback.\n\n\
                   Examples:\n  \
@@ -107,7 +110,9 @@ struct Args {
     timeout: u64,
 
     /// Write the results to available.txt, unavailable.txt and, if any
-    /// lookup failed, unknown.txt. Nothing is written without this.
+    /// lookup failed, unknown.txt. With --json they are written as
+    /// available.json, unavailable.json and unknown.json instead. Nothing is
+    /// written without this.
     #[arg(short, long)]
     save: bool,
 
@@ -163,6 +168,17 @@ struct Args {
     #[arg(long = "whois-mode", value_enum, default_value_t = ListMode::Merge)]
     whois_mode: ListMode,
 
+    /// Custom price table, in the same format as the bundled pricing.json.
+    /// Without this, ./pricing.json and ~/.config/ds/pricing.json are picked
+    /// up automatically when they exist.
+    #[arg(long = "pricing-file", value_name = "PATH")]
+    pricing_file: Option<PathBuf>,
+
+    /// What to do with that table: merge it over the bundled one (custom
+    /// entries win) or use only it.
+    #[arg(long = "pricing-mode", value_enum, default_value_t = ListMode::Merge)]
+    pricing_mode: ListMode,
+
     /// Never query whois.iana.org: no referral when a bundled WHOIS host is
     /// stale, and no registry names for --where.
     #[arg(long = "no-iana")]
@@ -179,6 +195,10 @@ struct Args {
     /// Disable coloured output.
     #[arg(long = "no-color")]
     no_color: bool,
+
+    /// Print the version and exit.
+    #[arg(short = 'v', short_alias = 'V', long, action = clap::ArgAction::Version)]
+    version: Option<bool>,
 }
 
 /// Which level of the tree a name is registered at.
@@ -276,6 +296,7 @@ struct Ctx {
     limiter: HostLimiter,
     bootstrap: Bootstrap,
     registry: Registry,
+    prices: Prices,
     /// Used for every RDAP/WHOIS connection.
     resolver: TokioAsyncResolver,
     /// Only for `--dns-records`.
@@ -373,6 +394,27 @@ async fn run() -> Result<()> {
         list_note("whois:", count, path, whois_only, &args);
     }
 
+    let pricing_path = args
+        .pricing_file
+        .clone()
+        .or_else(|| discover_config("pricing.json"));
+    let custom_prices = match &pricing_path {
+        Some(path) => Some(Prices::from_file(path)?),
+        None => None,
+    };
+    let prices_only = custom_prices.is_some() && args.pricing_mode == ListMode::Only;
+
+    let mut prices = if prices_only {
+        Prices::default()
+    } else {
+        Prices::load().context("loading the bundled pricing.json")?
+    };
+    if let (Some(custom), Some(path)) = (custom_prices, &pricing_path) {
+        let count = custom.len();
+        prices.merge(custom);
+        list_note("pricing:", count, path, prices_only, &args);
+    }
+
     let custom_path = args
         .rdap_file
         .clone()
@@ -440,6 +482,7 @@ async fn run() -> Result<()> {
         client,
         bootstrap,
         registry,
+        prices,
         resolver,
         records,
         timeout,
@@ -829,6 +872,7 @@ async fn check(ctx: &Ctx, domain: String, tld: String) -> CheckResult {
     };
 
     CheckResult {
+        price: ctx.prices.lookup(&tld),
         domain,
         tld,
         status,
@@ -866,12 +910,20 @@ fn print_result(args: &Args, r: &CheckResult) {
         Status::Unknown => ("?", Color::Yellow),
     };
 
+    // The price is the TLD's, so it is printed whatever the status: it is what
+    // the name would cost, not a quote for this domain.
+    let price = match &r.price {
+        Some(p) => p.label(),
+        None => "-".into(),
+    };
+
     // Pad before painting: ANSI codes would otherwise count toward the width.
     println!(
-        "{} {} {} {:<6} {:>6}ms{}",
+        "{} {} {} {} {:<6} {:>6}ms{}",
         paint(mark, color),
         paint(&format!("{:<32}", r.domain), Color::Bold),
         paint(&format!("{:<10}", r.status.as_str()), color),
+        paint(&format!("{price:>8}"), Color::Dim),
         r.method.as_str(),
         r.elapsed_ms,
         match (&r.note, r.status) {
@@ -995,40 +1047,76 @@ fn save(args: &Args, results: &[CheckResult]) -> Result<Vec<(PathBuf, usize)>> {
     let dir = args.out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
 
+    // --json asks for JSON everywhere, saved files included.
+    let ext = if args.json { "json" } else { "txt" };
     let groups = [
-        (Status::Available, "available.txt"),
-        (Status::Taken, "unavailable.txt"),
-        (Status::Unknown, "unknown.txt"),
+        (Status::Available, "available"),
+        (Status::Taken, "unavailable"),
+        (Status::Unknown, "unknown"),
     ];
 
     let mut written = Vec::new();
-    for (status, filename) in groups {
-        let lines: Vec<&str> = results
-            .iter()
-            .filter(|r| r.status == status)
-            .map(|r| r.domain.as_str())
-            .collect();
+    for (status, stem) in groups {
+        let matching: Vec<&CheckResult> = results.iter().filter(|r| r.status == status).collect();
 
-        // Only create unknown.txt when there is something to put in it.
-        if status == Status::Unknown && lines.is_empty() {
+        // Only create the unknown file when there is something to put in it.
+        if status == Status::Unknown && matching.is_empty() {
             continue;
         }
 
-        let path = dir.join(filename);
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(args.append)
-            .truncate(!args.append)
-            .open(&path)
-            .with_context(|| format!("writing {}", path.display()))?;
-        for line in &lines {
-            writeln!(file, "{line}")?;
+        let path = dir.join(format!("{stem}.{ext}"));
+
+        if args.json {
+            // Two JSON arrays back to back are not a JSON file, so appending
+            // means merging with whatever the last run left behind.
+            let mut entries = if args.append {
+                saved_entries(&path)?
+            } else {
+                Vec::new()
+            };
+            for r in &matching {
+                entries.push(serde_json::to_value(r)?);
+            }
+            let body = serde_json::to_string_pretty(&entries)?;
+            std::fs::write(&path, format!("{body}\n"))
+                .with_context(|| format!("writing {}", path.display()))?;
+        } else {
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(args.append)
+                .truncate(!args.append)
+                .open(&path)
+                .with_context(|| format!("writing {}", path.display()))?;
+            for r in &matching {
+                writeln!(file, "{}", r.domain)?;
+            }
         }
-        written.push((path, lines.len()));
+
+        written.push((path, matching.len()));
     }
 
     Ok(written)
+}
+
+/// The entries already in a saved JSON file, so `--append` extends that array.
+/// A missing file is an empty one; anything else there is left alone rather
+/// than overwritten.
+fn saved_entries(path: &Path) -> Result<Vec<serde_json::Value>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(&text).with_context(|| {
+        format!(
+            "{} is not a JSON array — --append cannot extend it",
+            path.display()
+        )
+    })
 }
 
 fn summarize(results: &[CheckResult], elapsed: Duration, written: &[(PathBuf, usize)]) {
