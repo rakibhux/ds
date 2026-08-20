@@ -14,3 +14,11 @@
 /*.zip
 /staging/
 /dmg/
+
+# GUI build files and dependencies
+/gui/node_modules/
+/gui/dist/
+
+# Local binaries and helper scripts
+/ds.exe
+/Run-App.bat
