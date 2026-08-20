@@ -57,6 +57,15 @@ app.on('window-all-closed', () => {
 });
 
 // IPC Handlers
+ipcMain.handle('get-default-binary-path', async () => {
+  const isDev = !app.isPackaged;
+  if (isDev) {
+    return path.join(__dirname, '..', 'ds.exe');
+  } else {
+    return path.join(path.dirname(app.getPath('exe')), 'ds.exe');
+  }
+});
+
 ipcMain.handle('select-binary', async () => {
   try {
     const result = await dialog.showOpenDialog({

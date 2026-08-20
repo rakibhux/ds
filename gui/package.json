@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "package": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "lucide-react": "^0.435.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "lucide-react": "^0.435.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
@@ -19,8 +20,41 @@
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^8.2.2",
     "electron": "^31.3.1",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.5.3",
     "vite": "^5.4.1",
     "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.rakibhux.dsgui",
+    "productName": "Domain Search",
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Domain Search"
+    },
+    "extraFiles": [
+      {
+        "from": "../ds.exe",
+        "to": "ds.exe"
+      }
+    ]
   }
 }

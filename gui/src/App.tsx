@@ -33,7 +33,7 @@ const TLD_PRESETS = {
 export default function App() {
   const [activeTab, setActiveTab] = useState<'search' | 'settings'>('search');
   const [binaryPath, setBinaryPath] = useState<string>(() => {
-    return localStorage.getItem('ds_binary_path') || 'D:\\Products ship\\DS GUI Product\\ds.exe';
+    return localStorage.getItem('ds_binary_path') || '';
   });
   const [isBinaryValid, setIsBinaryValid] = useState<boolean>(false);
   const [isValidating, setIsValidating] = useState<boolean>(false);
@@ -64,16 +64,30 @@ export default function App() {
     }
   }, [binaryPath]);
 
-  // Validate binary path on change
+  // Validate binary path on change, and load default if not set
   useEffect(() => {
-    const validate = async () => {
-      if (!binaryPath || !window.api) {
+    const initAndValidate = async () => {
+      let currentPath = binaryPath;
+      if (!currentPath && window.api) {
+        try {
+          const defaultPath = await window.api.getDefaultBinaryPath();
+          if (defaultPath) {
+            setBinaryPath(defaultPath);
+            currentPath = defaultPath;
+          }
+        } catch (err) {
+          console.error('Failed to get default binary path:', err);
+        }
+      }
+
+      if (!currentPath || !window.api) {
         setIsBinaryValid(false);
         return;
       }
+
       setIsValidating(true);
       try {
-        const valid = await window.api.checkBinary(binaryPath);
+        const valid = await window.api.checkBinary(currentPath);
         setIsBinaryValid(valid);
       } catch (err) {
         setIsBinaryValid(false);
@@ -81,7 +95,7 @@ export default function App() {
         setIsValidating(false);
       }
     };
-    validate();
+    initAndValidate();
   }, [binaryPath]);
 
   // Clean up IPC listeners on unmount

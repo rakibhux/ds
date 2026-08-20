@@ -18,6 +18,7 @@
 # GUI build files and dependencies
 /gui/node_modules/
 /gui/dist/
+/gui/dist-app/
 
 # Local binaries and helper scripts
 /ds.exe

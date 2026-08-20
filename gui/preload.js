@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 console.log('Preload script loaded successfully!');
 
 contextBridge.exposeInMainWorld('api', {
+  getDefaultBinaryPath: () => ipcRenderer.invoke('get-default-binary-path'),
   selectBinary: () => ipcRenderer.invoke('select-binary'),
   checkBinary: (filePath) => ipcRenderer.invoke('check-binary', filePath),
   runSearch: (args) => ipcRenderer.send('run-search', args),

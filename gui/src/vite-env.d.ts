@@ -2,6 +2,7 @@
 
 interface Window {
   api: {
+    getDefaultBinaryPath: () => Promise<string | null>;
     selectBinary: () => Promise<string | null>;
     checkBinary: (filePath: string) => Promise<boolean>;
     runSearch: (args: { binaryPath: string; domains: string[]; tlds: string[]; extraArgs?: string[] }) => void;
