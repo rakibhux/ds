@@ -25,6 +25,10 @@ attached — never guessed as available.
 The column after the status is what the TLD costs to register for a year, in
 US dollars — see [Prices](#prices).
 
+## Domain Search GUI
+
+A beautiful, premium desktop interface for this tool is available! If you prefer a graphical user interface over the command line, check out the [Domain Search GUI README](gui/README.md) for instructions on running, building, and packaging the desktop app.
+
 ## Install
 
 On macOS or Linux with [Homebrew](https://brew.sh):
